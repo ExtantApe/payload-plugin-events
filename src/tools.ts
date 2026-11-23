@@ -212,7 +212,7 @@ export async function eventBySlug(payload: Payload, slug: string, opts: { where?
   const o = eventsOptions(payload)
   const find = async (field: string) =>
     (
-      await payload.find({ collection: o.events as never, where: { and: [opts.where ?? {}, { [field]: { equals: slug } }] }, limit: 1, depth: 1, overrideAccess: !opts.req, user: opts.req?.user, req: opts.req })
+      await payload.find({ pagination: false, collection: o.events as never, where: { and: [opts.where ?? {}, { [field]: { equals: slug } }] }, limit: 1, depth: 1, overrideAccess: !opts.req, user: opts.req?.user, req: opts.req })
     ).docs[0] as unknown as EventDoc | undefined
   const direct = await find('slug')
   if (direct) return { event: direct, redirect: null }
