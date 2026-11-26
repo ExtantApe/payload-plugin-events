@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1 (2026-11-26)
+
+- **Fix: finds that can run inside a transaction no longer paginate.** A paginated find makes Payload's Mongo adapter send the find and its count together on the request's session. When that is the first query in a transaction, the two race to start it and one can fail with `NoSuchTransaction`. These finds only use the rows, so they now pass `pagination: false`; any limit still applies. Lists that page for people are unchanged.
+
+Tested: 38 tests and the build. Not tested: the race itself, which isn't reproduced here, and a real site.
+
 ## 0.2.0 (2026-11-11)
 
 - **Behavior change (2026-11-11): only admin users write by default.** With no `access.write`, any signed-in account of any auth collection, members included, could create, edit and delete events and use the merge and arrange endpoints. Now only users of the admin collection (`admin.user` in the Payload config) can. Sites relying on the old default must pass the option.

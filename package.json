@@ -1,6 +1,6 @@
 {
   "name": "@extantape/payload-plugin-events",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Events for Payload: events and their dates, with repeat rules in the event's timezone, near-me search, appearances, merge and split, and calendar files.",
   "keywords": [
     "payload",
