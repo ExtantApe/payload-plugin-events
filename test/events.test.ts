@@ -2,7 +2,7 @@ import { mongooseAdapter } from '@payloadcms/db-mongodb'
 import { MongoMemoryReplSet } from 'mongodb-memory-server'
 import { buildConfig, createLocalReq, getPayload, type CollectionConfig, type Config, type Endpoint, type Payload, type PayloadRequest } from 'payload'
 import { configToSchema } from '@payloadcms/graphql'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { arrangeDates, dropOffDates, eventBySlug, eventCalendar, events, findSimilar, mergeEvents, nearbyDates, topUpRecurring, type EventDateDoc, type EventDoc } from '../src/index.js'
 
@@ -190,6 +190,26 @@ describe('access', () => {
     const merge = (payload.collections.events!.config.endpoints as Endpoint[]).find((e) => e.path === '/merge')!
     await expect(merge.handler(req)).rejects.toThrow(/can’t change events/)
   })
+
+  it('reads as the request’s user in eventBySlug, nearbyDates and a date’s calendar file, so a visitor finds no draft', async () => {
+    const draft = (await payload.create({ collection: 'events', data: { name: 'Unannounced show', site: 'v', _status: 'draft' } as never, draft: true })) as unknown as EventDoc
+    const date = await payload.create({ collection: 'event-dates', data: { event: draft.id, starts: new Date(Date.now() + 10 * 86_400_000).toISOString(), venue: { postalCode: '85001' } } as never })
+    const visitor = (await createLocalReq({}, payload)) as PayloadRequest
+    visitor.user = null
+    const staff = await as()
+    expect(draft.slug).toBeTruthy()
+    expect(await eventBySlug(payload, draft.slug, { req: visitor })).toEqual({ event: null, redirect: null })
+    expect((await eventBySlug(payload, draft.slug, { req: staff })).event?.id).toBe(draft.id)
+    const q = { lng: -112.07, lat: 33.45, miles: 50, from: new Date(), to: new Date(Date.now() + 60 * 86_400_000), where: { site: { equals: 'v' } } }
+    expect(await nearbyDates(payload, { ...q, req: visitor })).toEqual([])
+    expect(await nearbyDates(payload, { ...q, req: staff })).toHaveLength(1)
+    // The date's own calendar file is hidden the same way.
+    const ep = (payload.collections['event-dates']!.config.endpoints as Endpoint[]).find((e) => e.path === '/:id/ics')!
+    visitor.routeParams = { id: String(date.id) }
+    expect((await ep.handler(visitor)).status).toBe(404)
+    staff.routeParams = { id: String(date.id) }
+    expect((await ep.handler(staff)).status).toBe(200)
+  })
 })
 
 describe('access for signed-in people', () => {
@@ -304,6 +324,27 @@ describe('merge and split', () => {
     expect((await mergeEvents(req, { into: String(into.id), from: [String(single.id)] })).summary).toBe('1 event merges into “Phoenix Reptile Expo”; 0 dates move; its address leads to it.')
     const other = await mkEvent({ name: 'Other site', site: 'b' })
     expect((await mergeEvents(req, { into: String(into.id), from: [String(other.id)], apply: true })).refused[0]).toMatch(/different site/)
+  })
+
+  it('changes nothing when a merge fails partway: the whole transaction is undone', async () => {
+    const into = await mkEvent({ name: 'Yuma Herp Day' })
+    const from = await mkEvent({ name: 'Yuma Herp Day Fall' })
+    const [x, y] = [await mkDate(into), await mkDate(from)]
+    const req = await as()
+    // By the time the old event is removed, the dates have already moved inside the transaction.
+    const failing = vi.spyOn(payload, 'delete').mockRejectedValueOnce(new Error('made-up failure'))
+    try {
+      await expect(mergeEvents(req, { into: String(into.id), from: [String(from.id)], apply: true })).rejects.toThrow('made-up failure')
+      expect(failing).toHaveBeenCalledTimes(1)
+    } finally {
+      failing.mockRestore()
+    }
+    expect((await datesOf(into.id)).map((d) => d.id)).toEqual([x.id])
+    expect((await datesOf(from.id)).map((d) => d.id)).toEqual([y.id])
+    const after = (await payload.find({ collection: 'events', where: { id: { in: [into.id, from.id] } }, sort: 'name', limit: 0, pagination: false, depth: 0 })).docs as unknown as EventDoc[]
+    expect(after.map((e) => e.name)).toEqual(['Yuma Herp Day', 'Yuma Herp Day Fall'])
+    expect(after[0]!.reusable).toBeFalsy()
+    expect(after[0]!.formerSlugs ?? []).toEqual([])
   })
 })
 

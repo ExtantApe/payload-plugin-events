@@ -2,6 +2,47 @@
 
 Newest first.
 
+## 2026-11-26: sweep after the transaction fix
+
+Suite: 38 tests before, 48 after (`npm test`, real Payload 3.92 and in-memory MongoDB for four files, a made-up Payload for `test/transactions.test.ts`; made-up events and users, no site).
+
+- **Promises.** From the README, `docs/decisions.md` and the changelog since the last entry (0.2.1 is the only release since):
+  1. 0.2.1: a find that can run inside a request’s transaction passes `pagination: false`, so no count is sent beside it.
+  2. Visitors and signed-in people read published events and dates only. Drafts are for those the write rule lets in, and only where it lets them.
+  3. Write access fails closed: admin users only by default, and only `true` or a non-empty query counts.
+  4. A query from the write rule scopes the endpoints (404 when an event is outside it).
+  5. Copied fields always come from the event.
+  6. Merge and split show a plan first, run in one transaction as the signed-in person, and refuse a protected date.
+  7. Old addresses lead to the merged event and aren’t reused.
+  8. A default timezone that the field can’t hold is refused at start-up, and `UTC` works with none set.
+  9. Repeat rules, top-up, appearances and drop-off, geocoding, near-me, duplicates, calendar files, fixed choices, the GraphQL schema.
+- **Covered.**
+  - 1: `test/transactions.test.ts`: "asks once, without a count, when the address is current", "asks twice, both without a count, when the address is a merged-away one", "asks twice, both without a count, when nothing has the address", "still asks for one row only, as the request’s user", "findSimilar: the events list and the same-venue dates", "nearbyDates", "arrangeDates and mergeEvents: each event’s dates, when planning", "syncDates: the dates a rule made, read from a save hook’s request".
+  - 2: `test/events.test.ts`: "shows visitors only published events and their dates, and refuses their writes", "shows a member only published events and their dates, and staff the drafts too", "reads as the request’s user in eventBySlug, nearbyDates and a date’s calendar file, so a visitor finds no draft". `test/access-default.test.ts`: "shows a member published events only, and an admin the drafts".
+  - 3: `test/access-default.test.ts`: "refuses a member of a second auth collection: no create, edit or delete, and no endpoint", "answers someone not signed in with 401", "lets a user of the admin collection change events and use the endpoints". `test/access-scoped.test.ts`: "refuses every endpoint with 403, never a 500, and changes nothing", "refuses collection writes with 403 and shows no drafts, without a 500".
+  - 4: `test/access-scoped.test.ts`: "lets a curator of site A arrange an event of site A, and not one of site B", "lets a curator merge site A events, and refuses any merge that touches site B, either way round", "lets a platform admin (true) work on any site, and refuses a member (false) with 403".
+  - 5: `test/events.test.ts`: "always takes them from the event: a date can’t claim another site, on create, on an edit or by moving".
+  - 6: `test/events.test.ts`: "plans first, then splits dates into new events, keeping each date’s id", "refuses a split that would move a protected date, or a date the rule would remake", "changes nothing when a merge fails partway: the whole transaction is undone".
+  - 7: `test/events.test.ts`: "merges single events into one reusable event whose address the old ones lead to".
+  - 8: `test/default-timezone.test.ts`, both tests.
+  - 9: `test/rules.test.ts` and the rest of `test/events.test.ts`, as mapped in the 2026-11-09 entries below.
+- **Gaps added.** 10 tests.
+  - `test/transactions.test.ts` (8, new file). A made-up Payload records every `find`; each one that carries a `req` must pass `pagination: false`. Four tests drive `eventBySlug`, the only code 0.2.1 changed: a current address (one find), a merged-away address (two finds) and no match (two finds), plus one that the limit of 1 and the request’s user still go through. Four more guard the other finds that take a request and already passed it: `findSimilar`, `nearbyDates`, the dates lookup under `arrangeDates` and `mergeEvents`, and `syncDates`.
+  - **Failed first.** With `src/tools.ts` put back to the commit before the fix (`git show 150f075^:src/tools.ts`), `npx vitest run test/transactions.test.ts` gave 3 failed, 5 passed: the three `eventBySlug` lookups, each "expected undefined to be false". With the fix restored, 8 passed.
+  - `test/events.test.ts`: "reads as the request’s user in eventBySlug, nearbyDates and a date’s calendar file, so a visitor finds no draft". Until now `eventBySlug` and `nearbyDates` were only called with no request, where they read everything, and the date calendar file had no test of its own. A draft event and its date: a visitor’s request gets nothing from all three (404 for the file), and staff get them.
+  - `test/events.test.ts`: "changes nothing when a merge fails partway: the whole transaction is undone". The removal of the old event is made to fail once, after the dates have moved. The merge rejects, and both events, their dates, the reusable mark and the old addresses are as they were.
+  - **Mutation checks.** 4, each a Python string replace undone with `git checkout`, and each fails its new test: `eventBySlug` overriding access when it has a request, `nearbyDates` doing the same, the date calendar file overriding access, and merge running with no transaction.
+- **Gaps skipped.**
+  - The race itself. It needs a real replica set and luck (about 1 in 7 where it was found), and a test that fails now and then proves little. The tests check its cause.
+  - Finds inside the collection hooks (`src/collections.ts`) and the endpoints’ own lookups (`src/index.ts`). 0.2.1 didn’t change them, they already pass `pagination: false`, and a made-up Payload can’t reach a hook. A rule over all source is the lint’s job.
+  - `findByID` and `count`. Neither sends a second query beside itself.
+  - How Payload applies an access answer, and how its Mongo adapter starts, commits and ends a transaction. Framework internals, used through the real thing in four of the five files.
+  - A split failing partway. It goes through the same `withTransaction` as merge, which the new rollback test and its mutation check cover.
+  - Organizer suggestions, drag and drop by mouse and a real screen reader, as in the 2026-11-09 entries.
+- **For the lead.**
+  - `findSimilar` reads with `overrideAccess: !opts.req?.user`, so a request with nobody signed in reads every event, drafts included. The `/similar` endpoint checks the write rule first, so it isn’t reachable there, but a site calling the exported function with a visitor’s request would get draft names back. `eventBySlug` and `nearbyDates` use `!opts.req`. Not changed or pinned by a test here, since it may be meant.
+  - The README’s status line still says 36 tests, and its Access section still calls the 2026-11-11 change unreleased. It shipped in 0.2.0.
+
 ## 2026-11-11: the default timezone is always valid
 
 - **The change.** `src/fields.ts`: the timezone list starts with `UTC`, which `Intl.supportedValuesOf('timeZone')` leaves out. `src/index.ts`: a `defaultTimezone` outside the list is refused at start-up.
